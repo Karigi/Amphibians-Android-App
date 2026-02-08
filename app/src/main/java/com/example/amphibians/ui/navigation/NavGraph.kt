@@ -52,20 +52,19 @@ fun NavGraph(
 
     val isShowingHomeScreen = currentRoute == AmphibiansNavigationScreen.HOME_SCREEN.route
 
-    val contentType: AmphibiansAppContentType
 
-    when(windowSize){
+    val contentType = when(windowSize){
         WindowWidthSizeClass.Compact -> {
-            contentType = AmphibiansAppContentType.LIST_ONLY
+            AmphibiansAppContentType.LIST_ONLY
         }
         WindowWidthSizeClass.Medium -> {
-            contentType = AmphibiansAppContentType.LIST_AND_DETAIL
+            AmphibiansAppContentType.LIST_AND_DETAIL
         }
         WindowWidthSizeClass.Expanded -> {
-            contentType = AmphibiansAppContentType.LIST_AND_DETAIL
+            AmphibiansAppContentType.LIST_AND_DETAIL
         }
         else -> {
-            contentType = AmphibiansAppContentType.LIST_ONLY
+            AmphibiansAppContentType.LIST_ONLY
         }
     }
 
