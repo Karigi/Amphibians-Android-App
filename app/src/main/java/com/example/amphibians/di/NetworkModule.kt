@@ -1,6 +1,7 @@
 package com.example.amphibians.di
 
-import com.example.amphibians.network.apiservices.AmphibiansApiService
+
+import com.example.amphibians.network.apiservices.GbifApiService
 import com.example.amphibians.network.interceptor.LoggingInterceptor
 import dagger.Module
 import dagger.Provides
@@ -18,7 +19,7 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
 
-    private const val AMPHIBIANS_BASE_URL = "https://android-kotlin-fun-mars-server.appspot.com/"
+    private const val GBIF_BASE_URL = "https://api.gbif.org/v1/"
 
     // Ignore unknown Json Keys
     @Provides
@@ -47,7 +48,7 @@ object NetworkModule {
     ): Retrofit {
         val contentType = "application/json".toMediaType()
         return Retrofit.Builder()
-            .baseUrl(AMPHIBIANS_BASE_URL)
+            .baseUrl(GBIF_BASE_URL)
             .client(okHttpClient)
             .addConverterFactory(json.asConverterFactory(contentType))
             .build()
@@ -57,8 +58,8 @@ object NetworkModule {
     @Singleton
     fun provideAmphibiansApiService(
         retrofit: Retrofit
-    ): AmphibiansApiService {
-        return retrofit.create(AmphibiansApiService::class.java)
+    ): GbifApiService {
+        return retrofit.create(GbifApiService::class.java)
     }
 
 }

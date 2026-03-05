@@ -1,14 +1,11 @@
 package com.example.amphibians.ui.screens.amphibians
 
 import android.util.Log
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.amphibians.data.AmphibiansRepository
 import com.example.amphibians.model.amphibians.Amphibian
-import com.example.amphibians.utils.AmphibiansAppContentType
+import com.example.amphibians.model.amphibians.AmphibiansPage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -38,10 +35,20 @@ sealed interface AmphibiansDataState {
 
 data class AmphibiansUiState(
     val dataState: AmphibiansDataState = AmphibiansDataState.Loading,
-    val selectedAmphibianId: Int? = null,
+    val selectedAmphibianId: Long? = null,
+
+    // Pagination
+    val isLoadingMore: Boolean = false,
+    val endReached: Boolean = false,
+
+    /**
+     * If loading the NEXT page fails, we store the message here.
+     * - null  -> no paging error
+     * - non-null -> show Retry + message in footer
+     */
+    val pagingErrorMessage: String? = null
 )
 
-/** [put details screen ui state below] */
 
 
 @HiltViewModel
@@ -56,9 +63,33 @@ class AmphibiansViewModel @Inject constructor(
     private val _amphibiansCachedList = MutableStateFlow<List<Amphibian>>(emptyList())
     val amphibiansCachedList: StateFlow<List<Amphibian>> = _amphibiansCachedList.asStateFlow()
 
+    // Pagination
+    private var offset: Int = 0
+    private val pageSize: Int = 50
+
+
 
     init {
-        getAmphibians()
+        refresh()
+    }
+
+    fun refresh(){
+        offset = 0
+
+        // Clear cache immediately
+        _amphibiansCachedList.update { emptyList() }
+
+        _amphibiansUiState.update{
+            it.copy(
+                dataState = AmphibiansDataState.Loading,
+                isLoadingMore = false,
+                endReached = false,
+                pagingErrorMessage = null // Clear error message
+            )
+        }
+        // Load the first page
+        loadNextPage()
+
     }
 
     // Selected Amphibian
@@ -89,77 +120,89 @@ class AmphibiansViewModel @Inject constructor(
 
 
 
-    fun getAmphibians(){
+    fun loadNextPage(){
         viewModelScope.launch{
 
-            // if cache already has data, don't load again
-            if(amphibiansCachedList.value.isNotEmpty()) {
-                _amphibiansUiState.update {
-                    it.copy(dataState = AmphibiansDataState.Success(amphibiansCachedList.value))
-                }
-                return@launch // exit the coroutine function
+            val currentState = amphibiansUiState.value
+
+            // Guard
+            if(currentState.isLoadingMore || currentState.endReached){
+                return@launch
             }
 
-            _amphibiansUiState.update { it.copy(dataState = AmphibiansDataState.Loading) }
+            // Show loading more
+            _amphibiansUiState.update {
+                it.copy(isLoadingMore = true)
+            }
+
 
             try {
-                val result: List<Amphibian> = withContext(Dispatchers.IO){
-                    amphibiansRepository.getAmphibians()
+                val page: AmphibiansPage = withContext(Dispatchers.IO){
+                    amphibiansRepository.getAmphibiansPage(offset = offset, limit = pageSize)
                 }
 
-                // create list with ids since the api doesn't have ids
-                val listWithIds = result.mapIndexed { index, amphibian ->
-                    // add id to each amphibian
-                    amphibian.copy(id = index)
+                // Append new items to the cached list
+                _amphibiansCachedList.update {
+                    it + page.items
                 }
 
-                _amphibiansCachedList.update { listWithIds }
+                // Update offset
+                offset += pageSize
+
                 _amphibiansUiState.update{
-                    it.copy(dataState = AmphibiansDataState.Success(listWithIds))
+                    it.copy(
+                        dataState = AmphibiansDataState.Success(_amphibiansCachedList.value),
+                        isLoadingMore = false,
+                        endReached = page.endOfRecords,
+                        pagingErrorMessage = null // Clear error message
+                    )
                 }
-                Log.d(TAG, "Amphibians: ${amphibiansCachedList.value}")
+                Log.d(TAG, "Amphibians: ${amphibiansCachedList.value.size}")
 
             } catch (e: CancellationException) {
                 throw e // never swallow cancellation
 
             } catch (e: UnknownHostException) {
-                _amphibiansUiState.update{
-                    it.copy(dataState = AmphibiansDataState.Error("No internet / DNS issue: \n ${e.message}"))
-                }
-                Log.e(TAG, "No internet / DNS issue: \n ${e.message}")
+                showError("No internet / DNS issue: \n ${e.message}")
             } catch (e: SocketTimeoutException) {
-                _amphibiansUiState.update{
-                    it.copy(dataState = AmphibiansDataState.Error("Request timed out: \n ${e.message} \n Try again later"))
-                }
-                Log.e(TAG, "Request timed out: \n ${e.message}")
+                showError("Request timed out: \n ${e.message}")
             } catch (e: InterruptedIOException) {
                 // Optional: many timeouts can come through here depending on the stack.
-                _amphibiansUiState.update{
-                    it.copy(dataState = AmphibiansDataState.Error("Connection interrupted or timed out: \n ${e.message} \n Try again later"))
-                }
-                Log.e(TAG, "Connection interrupted or timed out: \n ${e.message}")
+                showError("Connection interrupted or timed out: \n ${e.message}")
             } catch (e: HttpException) {
-                _amphibiansUiState.update{
-                    it.copy(dataState = AmphibiansDataState.Error("Server error: \n (HTTP ${e.code()}): ${e.message()}"))
-                }
-                Log.e(TAG, "Server error: \n (HTTP ${e.code()}): ${e.message()}")
+                showError("Server error: \n (HTTP ${e.code()}): ${e.message()}")
             } catch (e: SerializationException) {
-                _amphibiansUiState.update{
-                    it.copy(dataState = AmphibiansDataState.Error("Data error: could not read server response. \n ${e.message}"))
-                }
-                Log.e(TAG, "Data error: could not read server response. \n ${e.message}")
+                showError("Data error: could not read server response. \n ${e.message}")
             } catch (e: IOException) {
-                _amphibiansUiState.update{
-                    it.copy(dataState = AmphibiansDataState.Error("Network error: \n ${e.message} \n Please try again."))
-                }
-                Log.e(TAG, "Network error: \n ${e.message}")
+                showError("Network error: \n ${e.message}")
             } catch (e: Exception) {
-                _amphibiansUiState.update{
-                    it.copy(dataState = AmphibiansDataState.Error("Unexpected error: \n ${e.message}"))
-                }
-                Log.e(TAG, "Unexpected error: \n ${e.message}")
+                showError("Unexpected error: \n ${e.message}")
             }
         }
+    }
+
+    private fun showError(message: String) {
+        val hasItemsAlready = _amphibiansCachedList.value.isNotEmpty()
+
+        _amphibiansUiState.update { current ->
+            if (hasItemsAlready) {
+                // Paging error: keep list visible and show retry in footer
+                current.copy(
+                    dataState = AmphibiansDataState.Success(_amphibiansCachedList.value),
+                    isLoadingMore = false,
+                    pagingErrorMessage = message
+                )
+            } else {
+                // First page error: show full screen error
+                current.copy(
+                    dataState = AmphibiansDataState.Error(message),
+                    isLoadingMore = false,
+                    pagingErrorMessage = null
+                )
+            }
+        }
+
+        Log.e(TAG, message)
     }
 
 }

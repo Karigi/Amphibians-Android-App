@@ -74,6 +74,8 @@ dependencies {
     implementation(libs.dagger.hilt.android)
     // Foundation Layout Libraries
     implementation(libs.androidx.compose.foundation.layout)
+    // Material Libraries
+    implementation(libs.material)
     // Hilt Compiler Libraries
     ksp(libs.androidx.hilt.ksp.compiler)
     // Hilt ViewModel Libraries
