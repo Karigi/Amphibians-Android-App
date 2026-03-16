@@ -6,6 +6,10 @@ import com.example.amphibians.model.amphibians.AmphibiansPage
 import com.example.amphibians.model.amphibians.GbifOccurrence
 import com.example.amphibians.model.amphibians.gbifCachedImageUrl
 import com.example.amphibians.network.apiservices.GbifApiService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import javax.inject.Inject
 
 
@@ -23,8 +27,10 @@ private const val MEDIA_TYPE_IMAGE = "stillImage"
 interface AmphibiansRepository{
     /**
      * Loads one page using offset + limit.
+     *
+     * Returns a cold Flow that emits ONE page, then completes
      */
-    suspend fun getAmphibiansPage(offset: Int, limit: Int): AmphibiansPage
+    fun getAmphibiansPageFlow(offset: Int, limit: Int): Flow<AmphibiansPage>
 }
 
 /**
@@ -38,13 +44,25 @@ class NetworkAmphibiansRepository @Inject constructor (
 ) : AmphibiansRepository {
 
     /**
-     * Loads amphibians (occurrence records) that have images.
-     * This is used by the Home screen.
+     * This function does NOT immediately perform the network call.
+     *
+     * It RETURNS a Flow object.
+     *
+     * The actual code inside flow { ... } runs only when somebody collects it.
+     *
+     * That is what "cold flow" means:
+     * - create flow now
+     * - execute later when collected
      */
-    override suspend fun getAmphibiansPage(offset: Int, limit: Int): AmphibiansPage {
+    override fun getAmphibiansPageFlow(offset: Int, limit: Int): Flow<AmphibiansPage> = flow {
 
-        // 1) Call GBIF occurrence search
-        val page = gbifApi.searchOccurrences(
+        /**
+         * Everything inside this block is the "producer" side.
+         * This is where values are created and emitted.
+         */
+
+        // 1) Call GBIF occurrence search with paging
+        val response = gbifApi.searchOccurrences(
             taxonKey = AMPHIBIA_TAXON_KEY, // Amphibia
             mediaType = MEDIA_TYPE_IMAGE,  // only occurrences with images
             hasCoordinate = true,          // only with lat/lng (optional but useful)
@@ -52,50 +70,74 @@ class NetworkAmphibiansRepository @Inject constructor (
             offset = offset
         )
 
-        // 2) Map occurrences -> Amphibian, skipping ones that don't have an image url
-        val mappedItems: List<Amphibian> = page.results
-            .mapNotNull { it.toAmphibianOrNull(imageSize = "400x") }
+        /**
+         * 2) Convert the raw network models (GbifOccurrence)
+         *    into your app UI model (Amphibian).
+         *
+         * mapNotNull means:
+         * - transform each item
+         * - if transformation returns null, skip that item
+         *
+         * We skip occurrences with no usable image URL.
+         */
+        val amphibians = response.results.mapNotNull { occ ->
+            // Find the first media item with a non-null identifier (URL)
+            val mediaUrl = occ.media?.firstOrNull { it.identifier != null }?.identifier?: return@mapNotNull null
 
-        // 3) Return a small wrapper that includes endOfRecords
-        return AmphibiansPage(
-            items = mappedItems,
-            endOfRecords = page.endOfRecords
-        )
-    }
+            // Build a GBIF cached image URL
+            val imgUrl = gbifCachedImageUrl(
+                occurrenceKey = occ.key,
+                mediaIdentifierUrl = mediaUrl,
+                sizePrefix = "400x"
+            )
 
-    /**
-     * Converts a GBIF occurrence into Amphibian.
-     * Returns null if we can't find a media identifier URL.
-     */
-    private fun GbifOccurrence.toAmphibianOrNull(imageSize: String): Amphibian? {
+            // Build a description string for the card/details screen
+            val description = buildString {
+                append("Country: ${occ.country ?: "Unknown"}")
+                if (!occ.eventDate.isNullOrBlank()) append("\nDate: ${occ.eventDate}")
+                if (!occ.species.isNullOrBlank()) append("\nSpecies: ${occ.species}")
+                if (!occ.scientificName.isNullOrBlank()) append("\nScientific name: ${occ.scientificName}")
+            }
 
-        // A) Pick the first media item that has a URL
-        val mediaUrl: String = media
-            ?.firstOrNull { it.identifier != null }
-            ?.identifier
-            ?: return null // If no image URL exists, skip this occurrence
+            // Return one Amphibian item
+            Amphibian(
+                id = occ.key,
+                name = occ.species ?: occ.scientificName ?: "Unknown",
+                type = "Occurrence",
+                description = description,
+                imgSrc = imgUrl
+            )
 
-        // B) Build a GBIF cached image URL (faster and can be resized)
-        val cachedImageUrl: String = gbifCachedImageUrl(
-            occurrenceKey = key,
-            mediaIdentifierUrl = mediaUrl,
-            sizePrefix = imageSize
-        )
-
-        // C) Build a nice description string
-        val desc: String = buildString {
-            append("Country: ${country ?: "Unknown"}")
-            if (!eventDate.isNullOrBlank()) append("\nDate: $eventDate")
         }
 
-        // D) Return your UI model
-        return Amphibian(
-            id = key,
-            name = species ?: scientificName ?: "Unknown",
-            type = "Occurrence",
-            description = desc,
-            imgSrc = cachedImageUrl
+        /**
+         * 3) Emit ONE value downstream.
+         *
+         * That one emitted value is an AmphibiansPage object.
+         *
+         * Important:
+         * We are emitting ONE-page object.
+         * That page object itself contains a LIST of Amphibian items.
+         */
+        emit(
+            AmphibiansPage(
+                items = amphibians,
+                endOfRecords = response.endOfRecords
+            )
         )
+
     }
+
+        /**
+         * flowOn moves the UPSTREAM work to IO.
+         *
+         * "Upstream" means the work above this line:
+         * - the API call
+         * - the mapping
+         * - the emit
+         *
+         * Without this, that upstream work would run in the collector's context.
+         */
+        .flowOn(Dispatchers.IO)
 
 }

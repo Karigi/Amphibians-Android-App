@@ -2,6 +2,7 @@ package com.example.amphibians.ui.screens.amphibians
 
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
@@ -14,6 +15,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -39,7 +42,21 @@ fun DetailsScreen(
     onBackClick: () -> Unit,
     contentType: AmphibiansAppContentType,
     amphibiansViewModel: AmphibiansViewModel,
-    isShowingHomeScreen: Boolean
+    isShowingHomeScreen: Boolean,
+    // LongPress anywhere on the page
+    onPageLongPress: (Amphibian) -> Unit,
+    /**
+     * // ── NEW: same snackbarHostState from NavGraph ─────────────────────
+     *     // Exactly the same reasoning as HomeScreen.
+     *     // When the user is on the details screen and long-presses an amphibian
+     *     // (or any future action that fires ShowSnackbar), the NavGraph collector
+     *     // calls showSnackbar() on this object, and the SnackbarHost in THIS
+     *     // Scaffold renders it.
+     *     //
+     *     // At any given moment, only ONE screen's Scaffold is active and
+     *     // rendering a SnackbarHost. So there's never a conflict.
+     * */
+    snackbarHostState: SnackbarHostState
 ){
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
@@ -61,7 +78,14 @@ fun DetailsScreen(
                 onBackClick = onBackClick,
                 contentType = contentType,
             )
-        }
+        },
+        /**
+         * // ── SnackbarHost (same pattern as HomeScreen) ──────────────────
+         *         // The SAME snackbarHostState means the same queue.
+         *         // showSnackbar() called in NavGraph's collector will display here
+         *         // when DetailsScreen is the active screen.
+         * */
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
     ){ paddingValues ->
 
         AmphibianDetails(
@@ -69,7 +93,8 @@ fun DetailsScreen(
                 .padding(paddingValues),
             amphibian = amphibian,
             scrollState = scrollState,
-            isShowingHomeScreen = isShowingHomeScreen
+            isShowingHomeScreen = isShowingHomeScreen,
+            onLongPress = onPageLongPress
         )
 
     }
@@ -81,7 +106,8 @@ fun AmphibianDetails(
     modifier: Modifier = Modifier,
     amphibian: Amphibian?,
     scrollState: ScrollState,
-    isShowingHomeScreen: Boolean
+    isShowingHomeScreen: Boolean,
+    onLongPress: (Amphibian) -> Unit
 ){
     Column(
         modifier = modifier
@@ -89,6 +115,15 @@ fun AmphibianDetails(
             .verticalScroll(scrollState)
             .background(
                 color = MaterialTheme.colorScheme.surfaceVariant
+            )
+            .combinedClickable(
+                onClick = { },
+                onLongClick = {
+                    // Only forward the event when there is a selected amphibian.
+                    // This avoids a crash from force-unwrapping null while still
+                    // letting the details page expose a real long-press gesture.
+                    amphibian?.let(onLongPress)
+                }
             ),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {

@@ -1,6 +1,7 @@
 package com.example.amphibians.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -64,20 +67,95 @@ fun HomeScreen(
     contentType: AmphibiansAppContentType,
     onCardClick: (Amphibian) -> Unit,
     amphibiansViewModel: AmphibiansViewModel,
-    isShowingHomeScreen: Boolean
+    isShowingHomeScreen: Boolean,
+    /** ── NEW: snackbarHostState passed in from NavGraph ────────────────
+    // We do NOT create a new SnackbarHostState() here with remember {}.
+    // We receive the SAME instance that NavGraph created.
+    //
+    // WHY?
+    //   The SharedFlow collector lives in NavGraph. It calls
+    //   snackbarHostState.showSnackbar(). For the snackbar to APPEAR,
+    //   a SnackbarHost(snackbarHostState) must be rendered somewhere
+    //   in the active screen's Scaffold.
+    //
+    //   If HomeScreen created its OWN SnackbarHostState, the collector
+    //   in NavGraph would be calling showSnackbar() on a DIFFERENT object
+    //   than what the Scaffold is rendering — the snackbar would never appear.
+    //
+    //   By sharing the same instance, the NavGraph collector and the
+    //   Scaffold's SnackbarHost are connected to the same state.
+    */
+    snackbarHostState: SnackbarHostState
 ) {
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
 
+    /**
+     * // ── collectAsStateWithLifecycle() ─────────────────────────────────
+     *     // This is how you collect StateFlow in Compose.
+     *     //
+     *     // What it does:
+     *     //   1. Subscribes to the StateFlow as long as the lifecycle is at
+     *     //      least in the STARTED state (screen is visible).
+     *     //   2. Returns a Compose State<AmphibiansUiState> object.
+     *     //   3. Every time the StateFlow emits a new value, this State updates,
+     *     //      causing Compose to recompose any composable that reads it.
+     *     //   4. When the lifecycle drops below STARTED (app goes to background),
+     *     //      collection is paused — no wasted work while not visible.
+     *     //   5. When the lifecycle returns to STARTED, collection resumes and
+     *     //      the latest value is immediately available (because StateFlow
+     *     //      always holds its last value — replay=1).
+     *     //
+     *     // The `by` delegate:
+     *     //   Without `by`: val uiState: State<AmphibiansUiState> = ...
+     *     //                 → you'd have to write uiState.value.dataState
+     *     //   With    `by`: val uiState: AmphibiansUiState = ...
+     *     //                 → you write uiState.dataState directly
+     *     //   Both compile to the same bytecode. `by` is just syntactic sugar.
+     * */
     val amphibiansUiState by amphibiansViewModel.amphibiansUiState.collectAsStateWithLifecycle()
 
+    /**
+     * // rememberSaveable with LazyListState.Saver:
+     *     //   - rememberSaveable survives both recomposition AND config changes
+     *     //     (rotation, dark mode switch).
+     *     //   - LazyListState.Saver knows how to save/restore scroll position.
+     *     //   - Without this, rotating the phone would scroll the list back to top.
+     *     //   - IMPORTANT: this state is tied to this HomeScreen destination's
+     *     //     saveable-state scope. If navigation creates a BRAND-NEW HomeScreen
+     *     //     back-stack entry, Compose gives that new entry a new LazyListState,
+     *     //     so the list starts from the top again.
+     *     //   - That is why NavGraph must reveal the EXISTING HomeScreen with
+     *     //     popBackStack() instead of navigating to a new HomeScreen when
+     *     //     switching from details route into split mode.
+     * */
     val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() } // For list pane
+
+    /**
+     * // ── Long-press callback for snackbar demo ─────────────────────────────
+     * // The ViewModel already knows how to emit the one-shot snackbar event:
+     * //     onAmphibianLongPressed(amphibian)
+     * //
+     * // What was missing before this change was the UI gesture itself.
+     * // In other words:
+     * //   - the ViewModel had the "what should happen" logic
+     * //   - but the card had no "listen for long press" logic
+     * //
+     * // This lambda bridges those two layers:
+     * //   Card long-press → call ViewModel → emit SharedFlow event
+     * //   → NavGraph collects event → SnackbarHost shows snackbar.
+     */
+    val onCardLongPress: (Amphibian) -> Unit = { amphibian ->
+        amphibiansViewModel.onAmphibianLongPressed(amphibian)
+    } // ==> This function can be taken to the NavGraph but for learning purposes, I will use it here
+            // to show an example of how lambda functions are used. CHECK DETAILS SCREEN TO SEE ITS IMPLEMENTATION IN THE NAVGRAPH
 
     val selectedAmphibian = amphibiansViewModel.getSelectedAmphibianFromCache()
 
     // Reset details scroll state when user picks a new amphibian --> This is for details pane
     val selectedId = amphibiansUiState.selectedAmphibianId
     val scrollState = rememberScrollState()
+    // LaunchedEffect(selectedId) restarts its coroutine each time selectedId changes.
     LaunchedEffect(selectedId) {
         scrollState.animateScrollTo(0)
     }
@@ -103,7 +181,23 @@ fun HomeScreen(
                 onBackClick = {},
                 contentType = contentType
             )
-        }
+        },
+        /**
+         * // ── SnackbarHost ───────────────────────────────────────────────
+         *         // This is what RENDERS the snackbar visually.
+         *         //
+         *         // Scaffold reserves a slot at the bottom of the screen for snackbars.
+         *         // SnackbarHost(snackbarHostState) tells the Scaffold:
+         *         //   "Use this state object to know when to show a snackbar and what
+         *         //    message to display."
+         *         //
+         *         // When NavGraph's collector calls snackbarHostState.showSnackbar("..."),
+         *         // this SnackbarHost sees the state change and renders the bar.
+         *         //
+         *         // The Scaffold also handles padding so the snackbar doesn't overlap
+         *         // your content or the navigation bar.
+         * */
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
     ) { paddingValues ->
 
         when(val dataState = amphibiansUiState.dataState){
@@ -125,6 +219,7 @@ fun HomeScreen(
                                 .fillMaxSize(),
                             contentPadding = paddingValues,
                             onCardClick = onCardClick,
+                            onCardLongPress = onCardLongPress,
                             listState = listState,
                             amphibiansViewModel = amphibiansViewModel,
                             isLoadingMore = amphibiansUiState.isLoadingMore,
@@ -149,6 +244,7 @@ fun HomeScreen(
                                     .weight(1f)
                                     .fillMaxHeight(),
                                 onCardClick = onCardClick,
+                                onCardLongPress = onCardLongPress,
                                 listState = listState,
                                 contentPadding = PaddingValues(0.dp),
                                 amphibiansViewModel = amphibiansViewModel,
@@ -205,6 +301,10 @@ fun HomeScreen(
                                             // we are still on the home route in split mode:
                                             //  so we want the name to appear in the pane content
                                             isShowingHomeScreen = true,
+                                            // Reuse the same long-press callback as the cards so
+                                            // the split detail pane and the dedicated details route
+                                            // behave consistently.
+                                            onLongPress = onCardLongPress,
                                         )
                                     } else {
                                         Text(
@@ -249,7 +349,8 @@ fun HomeScreen(
 fun AmphibianCard(
     modifier: Modifier = Modifier,
     amphibian: Amphibian,
-    onCardClick: (Amphibian) -> Unit
+    onCardClick: (Amphibian) -> Unit,
+    onCardLongPress: (Amphibian) -> Unit
 ){
     Card(
         colors = CardDefaults.cardColors(
@@ -257,9 +358,31 @@ fun AmphibianCard(
             contentColor = MaterialTheme.colorScheme.onSurfaceVariant
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-        onClick = { onCardClick(amphibian) },
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
+            /**
+             * combinedClickable lets ONE composable react to multiple gestures.
+             *
+             * Why not just use Card(onClick = ...)?
+             * - Card(onClick = ...) handles normal taps.
+             * - But for this feature we also need a long-press gesture.
+             * - combinedClickable gives us both in one place:
+             *      onClick     -> open/select the amphibian
+             *      onLongClick -> fire the snackbar event
+             *
+             * Resulting flow:
+             * 1. User presses and holds the card.
+             * 2. onLongClick runs.
+             * 3. We call onCardLongPress(amphibian).
+             * 4. HomeScreen forwards that to the ViewModel.
+             * 5. ViewModel emits AmphibiansUiEvent.ShowSnackbar.
+             * 6. NavGraph collects the event and calls showSnackbar(...).
+             * 7. Scaffold's SnackbarHost renders the snackbar on screen.
+             */
+            .combinedClickable(
+                onClick = { onCardClick(amphibian) },
+                onLongClick = { onCardLongPress(amphibian) }
+            )
     ){
         Column(
             modifier = Modifier
@@ -297,6 +420,7 @@ fun AmphibiansList(
     modifier: Modifier = Modifier,
     amphibians: List<Amphibian>,
     onCardClick: (Amphibian) -> Unit,
+    onCardLongPress: (Amphibian) -> Unit,
     listState: LazyListState,
     contentPadding: PaddingValues,
     amphibiansViewModel: AmphibiansViewModel,
@@ -319,6 +443,7 @@ fun AmphibiansList(
             AmphibianCard(
                 amphibian = amphibian,
                 onCardClick = onCardClick,
+                onCardLongPress = onCardLongPress,
                 modifier = Modifier.fillMaxWidth()
             )
         }
