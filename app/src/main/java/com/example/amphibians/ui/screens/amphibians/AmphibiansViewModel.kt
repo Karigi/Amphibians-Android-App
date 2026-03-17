@@ -3,7 +3,7 @@ package com.example.amphibians.ui.screens.amphibians
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.amphibians.data.AmphibiansRepository
+import com.example.amphibians.data.repository.AmphibiansRepository
 import com.example.amphibians.model.amphibians.Amphibian
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException

@@ -1,9 +1,8 @@
-package com.example.amphibians.data
+package com.example.amphibians.data.repository
 
 
 import com.example.amphibians.model.amphibians.Amphibian
 import com.example.amphibians.model.amphibians.AmphibiansPage
-import com.example.amphibians.model.amphibians.GbifOccurrence
 import com.example.amphibians.model.amphibians.gbifCachedImageUrl
 import com.example.amphibians.network.apiservices.GbifApiService
 import kotlinx.coroutines.Dispatchers

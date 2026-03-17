@@ -1,7 +1,7 @@
 package com.example.amphibians.di
 
-import com.example.amphibians.data.AmphibiansRepository
-import com.example.amphibians.data.NetworkAmphibiansRepository
+import com.example.amphibians.data.repository.AmphibiansRepository
+import com.example.amphibians.data.repository.NetworkAmphibiansRepository
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
